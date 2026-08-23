@@ -7,7 +7,7 @@ source "${script_dir}/common.sh"
 
 require_macos
 require_command xcodebuild
-require_source_layout
+require_app_source_layout
 
 configuration="${V2RAYIOS_CONFIGURATION:-Release}"
 platform="${1:-device}"
@@ -50,6 +50,9 @@ case "${signing_mode}" in
             CODE_SIGNING_REQUIRED=NO
             CODE_SIGN_IDENTITY=
             DEVELOPMENT_TEAM=
+            "DEVELOPMENT_TEAM[sdk=iphoneos*]="
+            PROVISIONING_PROFILE_SPECIFIER=
+            "PROVISIONING_PROFILE_SPECIFIER[sdk=iphoneos*]="
         )
         ;;
     automatic)
@@ -76,4 +79,3 @@ xcodebuild "${build_arguments[@]}" clean build
 app_path="${derived_data_path}/Build/Products/${product_directory}/V2RayiOS.app"
 [[ -d "${app_path}" ]] || fail "expected app product was not created: ${app_path}"
 echo "Created ${app_path}"
-

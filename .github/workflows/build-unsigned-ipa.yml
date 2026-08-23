@@ -1,0 +1,164 @@
+name: Build unsigned IPA
+
+on:
+  push:
+    branches:
+      - "**"
+  workflow_dispatch:
+  release:
+    types:
+      - published
+
+permissions:
+  contents: read
+
+env:
+  V2RAY_CORE_DIR: ${{ github.workspace }}/v2ray-core
+  V2RAYIOS_BUILD_DIR: ${{ github.workspace }}/build
+  V2RAYIOS_CONFIGURATION: Release
+  V2RAYIOS_DERIVED_DATA: ${{ github.workspace }}/build/DerivedData-Release-device
+  V2RAYIOS_IPA_OUTPUT: ${{ github.workspace }}/build/V2RayiOS-Release-unsigned.ipa
+  V2RAYIOS_SIGNING_MODE: unsigned
+
+jobs:
+  build:
+    name: Build unsigned IPA
+    runs-on: macos-latest
+    timeout-minutes: 90
+
+    steps:
+      - name: Check out V2RayiOS
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Check for an existing V2binding framework
+        id: binding
+        shell: bash
+        run: |
+          source scripts/common.sh
+          if v2binding_is_available; then
+            echo "needs_core=false" >> "$GITHUB_OUTPUT"
+            echo "Using the existing $(v2binding_output_path)"
+          else
+            echo "needs_core=true" >> "$GITHUB_OUTPUT"
+            echo "V2binding is missing; the latest v2ray-core checkout is required"
+          fi
+
+      - name: Check out latest v2ray-core default branch
+        if: steps.binding.outputs.needs_core == 'true'
+        uses: actions/checkout@v7
+        with:
+          repository: v2fly/v2ray-core
+          path: v2ray-core
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Set up Go from v2ray-core
+        if: steps.binding.outputs.needs_core == 'true'
+        uses: actions/setup-go@v7
+        with:
+          go-version-file: v2ray-core/go.mod
+          cache-dependency-path: v2ray-core/go.sum
+
+      - name: Build and package unsigned IPA
+        shell: bash
+        run: ./scripts/build-all.sh
+
+      - name: Verify unsigned IPA
+        shell: bash
+        run: ./scripts/verify-unsigned-ipa.sh "$V2RAYIOS_IPA_OUTPUT"
+
+      - name: Collect build assets and metadata
+        env:
+          NEEDS_CORE: ${{ steps.binding.outputs.needs_core }}
+        shell: bash
+        run: |
+          ipa_sha="$(shasum -a 256 "$V2RAYIOS_IPA_OUTPUT" | awk '{print $1}')"
+          printf '%s  %s\n' "$ipa_sha" "$(basename "$V2RAYIOS_IPA_OUTPUT")" \
+            > "${V2RAYIOS_IPA_OUTPUT}.sha256"
+
+          dsym_path="${V2RAYIOS_DERIVED_DATA}/Build/Products/Release-iphoneos/V2RayiOS.app.dSYM"
+          if [[ -d "$dsym_path" ]]; then
+            ditto -c -k --keepParent "$dsym_path" \
+              "$V2RAYIOS_BUILD_DIR/V2RayiOS-Release.dSYM.zip"
+          fi
+
+          if [[ "$NEEDS_CORE" == "true" ]]; then
+            core_source="v2fly/v2ray-core default branch"
+            core_sha="$(git -C "$V2RAY_CORE_DIR" rev-parse HEAD)"
+          else
+            core_source="existing V2binding.xcframework"
+            core_sha="not fetched"
+          fi
+
+          {
+            echo "V2RayiOS commit: $GITHUB_SHA"
+            echo "V2Ray source: $core_source"
+            echo "V2Ray commit: $core_sha"
+            echo "IPA SHA-256: $ipa_sha"
+            xcodebuild -version
+            if command -v go >/dev/null 2>&1; then
+              go version
+            fi
+          } > "$V2RAYIOS_BUILD_DIR/build-info.txt"
+
+          {
+            echo "### Unsigned IPA"
+            echo '```text'
+            cat "$V2RAYIOS_BUILD_DIR/build-info.txt"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload build assets
+        uses: actions/upload-artifact@v7
+        with:
+          name: V2RayiOS-unsigned-${{ github.run_id }}-${{ github.run_attempt }}
+          if-no-files-found: error
+          path: |
+            build/*.ipa
+            build/*.ipa.sha256
+            build/*.dSYM.zip
+            build/build-info.txt
+
+  publish-release:
+    name: Publish release asset
+    if: github.event_name == 'release'
+    needs:
+      - build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Download build assets
+        uses: actions/download-artifact@v8
+        with:
+          name: V2RayiOS-unsigned-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/release-assets
+
+      - name: Locate IPA
+        id: ipa
+        shell: bash
+        run: |
+          ipa_path=""
+          ipa_count=0
+          while IFS= read -r -d '' candidate_path; do
+            ipa_path="$candidate_path"
+            ((ipa_count += 1))
+          done < <(find "$RUNNER_TEMP/release-assets" -type f -name '*.ipa' -print0)
+
+          if [[ "$ipa_count" -ne 1 ]]; then
+            echo "Expected exactly one IPA, found $ipa_count" >&2
+            exit 1
+          fi
+          echo "path=$ipa_path" >> "$GITHUB_OUTPUT"
+
+      - name: Upload IPA to GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          IPA_PATH: ${{ steps.ipa.outputs.path }}
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+        shell: bash
+        run: gh release upload "$RELEASE_TAG" "$IPA_PATH" --clobber --repo "$GITHUB_REPOSITORY"

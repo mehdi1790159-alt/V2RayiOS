@@ -33,11 +33,30 @@ require_macos() {
     [[ "$(uname -s)" == "Darwin" ]] || fail "this build requires macOS and Xcode"
 }
 
-require_source_layout() {
+require_app_source_layout() {
     [[ -f "${app_root}/V2RayiOS.xcodeproj/project.pbxproj" ]] || \
         fail "V2RayiOS Xcode project not found under ${app_root}"
+}
+
+require_core_source_layout() {
     [[ -f "${core_root}/go.mod" ]] || \
         fail "v2ray-core go.mod not found under ${core_root}; set V2RAY_CORE_DIR if it is elsewhere"
     [[ -d "${core_root}/main/v2binding" ]] || \
         fail "v2binding package not found under ${core_root}/main/v2binding"
+}
+
+require_source_layout() {
+    require_app_source_layout
+    require_core_source_layout
+}
+
+v2binding_output_path() {
+    printf '%s\n' "${V2BINDING_OUTPUT:-${app_root}/V2binding.xcframework}"
+}
+
+v2binding_is_available() {
+    local output_path
+    output_path="$(v2binding_output_path)"
+    [[ -f "${output_path}/Info.plist" ]] && \
+        [[ -d "${output_path}/ios-arm64/V2binding.framework" ]]
 }

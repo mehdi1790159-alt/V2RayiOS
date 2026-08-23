@@ -38,11 +38,15 @@ cd V2RayiOS-complete-build-source-20260823/V2RayiOS
 This performs the following operations:
 
 1. validates the source layout and macOS toolchain;
-2. installs the exact `gomobile` and `gobind` version recorded in the bundled
-   v2ray-core `go.mod` into `V2RayiOS/build/gomobile-tools`;
-3. builds device and simulator slices into `V2binding.xcframework`;
+2. when the framework is missing, installs the exact `gomobile` and `gobind`
+   version recorded in the bundled v2ray-core `go.mod` into
+   `V2RayiOS/build/gomobile-tools`;
+3. builds device and simulator slices into `V2binding.xcframework` when it is
+   not already present;
 4. builds an unsigned Release device app with Xcode; and
 5. packages it as `build/V2RayiOS-Release-unsigned.ipa`.
+
+Set `V2BINDING_FORCE_REBUILD=1` to regenerate an existing framework.
 
 To also compile the simulator app, run:
 
@@ -57,6 +61,7 @@ V2RAYIOS_BUILD_SIMULATOR=1 ./scripts/build-all.sh
 ./scripts/build-v2binding.sh
 ./scripts/build-app.sh device
 ./scripts/package-ipa.sh
+./scripts/verify-unsigned-ipa.sh
 ./scripts/build-app.sh simulator
 ```
 
@@ -93,3 +98,14 @@ The final IPA preserves whatever signature is present in the built `.app`.
 Apple account configuration and entitlement approval remain the builder's
 responsibility.
 
+## GitHub Actions
+
+`.github/workflows/build-unsigned-ipa.yml` builds on branch pushes, manual
+workflow runs, and published releases. When `V2binding.xcframework` is absent,
+the workflow checks out the current default-branch HEAD of
+`v2fly/v2ray-core`, and records the resolved commit in `build-info.txt`.
+
+Every successful run uploads the IPA, its SHA-256 checksum, build metadata,
+and the dSYM (when produced) as a GitHub Actions artifact. The workflow omits
+an explicit retention period so the repository or organization setting is
+used. Published-release runs also upload the IPA to that GitHub Release.

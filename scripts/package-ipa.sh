@@ -10,9 +10,15 @@ require_command unzip
 require_command ditto
 
 configuration="${V2RAYIOS_CONFIGURATION:-Release}"
+signing_mode="${V2RAYIOS_SIGNING_MODE:-unsigned}"
 derived_data_path="${V2RAYIOS_DERIVED_DATA:-${build_root}/DerivedData-${configuration}-device}"
 app_path="${V2RAYIOS_APP_PATH:-${derived_data_path}/Build/Products/${configuration}-iphoneos/V2RayiOS.app}"
 output_path="${V2RAYIOS_IPA_OUTPUT:-${build_root}/V2RayiOS-${configuration}-unsigned.ipa}"
+
+case "${signing_mode}" in
+    unsigned | automatic) ;;
+    *) fail "V2RAYIOS_SIGNING_MODE must be 'unsigned' or 'automatic'" ;;
+esac
 
 [[ -d "${app_path}" ]] || fail "device app not found: ${app_path}"
 [[ "${output_path}" == *.ipa ]] || fail "V2RAYIOS_IPA_OUTPUT must end in .ipa"
@@ -27,6 +33,26 @@ trap cleanup EXIT
 
 mkdir -p "${staging_path}/Payload"
 ditto "${app_path}" "${staging_path}/Payload/V2RayiOS.app"
+
+if [[ "${signing_mode}" == "unsigned" ]]; then
+    require_command codesign
+
+    # Process nested code before its containing app bundle. This only changes
+    # the temporary IPA staging tree, never the Xcode build product.
+    while IFS= read -r -d '' signable_path; do
+        if codesign --display --verbose=0 "${signable_path}" >/dev/null 2>&1; then
+            codesign --remove-signature "${signable_path}"
+        fi
+    done < <(
+        find "${staging_path}/Payload" -depth \
+            \( -type d \( -name '*.app' -o -name '*.appex' -o -name '*.framework' \) \
+            -o -type f -name '*.dylib' \) -print0
+    )
+
+    find "${staging_path}/Payload" -type f -name embedded.mobileprovision -delete
+    find "${staging_path}/Payload" -type d -name _CodeSignature -prune -exec rm -rf -- {} +
+fi
+
 rm -f -- "${output_path}"
 (
     cd "${staging_path}"
